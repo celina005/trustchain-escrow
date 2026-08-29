@@ -17,7 +17,13 @@ const {
 
 const LEVEL_NAME = process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level';
 
-/** Build a signed Sumsub request (HMAC-SHA256). */
+/**
+ * Build a signed Sumsub request (HMAC-SHA256).
+ * @param {string} method - HTTP method (e.g. 'GET', 'POST').
+ * @param {string} path - Request path, including query string.
+ * @param {string} [body=''] - Raw JSON request body, if any.
+ * @returns {Object} Headers object including auth/signature headers.
+ */
 function buildHeaders(method, path, body = '') {
   const ts = Math.floor(Date.now() / 1000).toString();
   const payload = ts + method.toUpperCase() + path + (body ? body : '');
@@ -31,6 +37,14 @@ function buildHeaders(method, path, body = '') {
   };
 }
 
+/**
+ * Perform an authenticated fetch against the Sumsub API.
+ * @param {string} method - HTTP method (e.g. 'GET', 'POST').
+ * @param {string} path - Sumsub API path, including query string.
+ * @param {Object} [body] - Request body to be JSON-encoded.
+ * @returns {Promise<Object>} Parsed JSON response body.
+ * @throws {Error} When the Sumsub API responds with a non-OK status.
+ */
 async function sumsubFetch(method, path, body) {
   const bodyStr = body ? JSON.stringify(body) : '';
   const res = await fetch(`${SUMSUB_BASE_URL}${path}`, {
@@ -46,7 +60,11 @@ async function sumsubFetch(method, path, body) {
   return res.json();
 }
 
-/** Create or retrieve a Sumsub applicant for the given Stellar address. */
+/**
+ * Create or retrieve a Sumsub applicant for the given Stellar address.
+ * @param {string} address - Stellar wallet address used as the external user id.
+ * @returns {Promise<Object>} The kycVerification DB record for this address.
+ */
 async function getOrCreateApplicant(address) {
   let record = await prisma.kycVerification.findUnique({ where: { address } });
 
@@ -65,7 +83,11 @@ async function getOrCreateApplicant(address) {
   return record;
 }
 
-/** Generate a short-lived SDK access token for the frontend widget. */
+/**
+ * Generate a short-lived SDK access token for the frontend widget.
+ * @param {string} address - Stellar wallet address the token is issued for.
+ * @returns {Promise<{token: string, applicantId: string}>} SDK token and applicant id.
+ */
 async function generateSdkToken(address) {
   const record = await getOrCreateApplicant(address);
   const data = await sumsubFetch(
@@ -75,12 +97,23 @@ async function generateSdkToken(address) {
   return { token: data.token, applicantId: record.applicantId };
 }
 
-/** Get current KYC status for an address (from DB, not Sumsub). */
+/**
+ * Get current KYC status for an address (from DB, not Sumsub).
+ * @param {string} address - Stellar wallet address to look up.
+ * @returns {Promise<Object|null>} The kycVerification record, or null if none exists.
+ */
 async function getStatus(address) {
   return prisma.kycVerification.findUnique({ where: { address } });
 }
 
-/** Get all KYC records for admin review (paginated). */
+/**
+ * Get all KYC records for admin review (paginated).
+ * @param {Object} [options={}] - Pagination and filter options.
+ * @param {number} [options.skip=0] - Number of records to skip.
+ * @param {number} [options.take=20] - Number of records to return.
+ * @param {string} [options.status] - Optional status filter.
+ * @returns {Promise<{data: Object[], total: number}>} Page of records and total count.
+ */
 async function listAll({ skip = 0, take = 20, status } = {}) {
   const where = status ? { status } : {};
   const [data, total] = await prisma.$transaction([
@@ -92,7 +125,12 @@ async function listAll({ skip = 0, take = 20, status } = {}) {
 
 /**
  * Process a Sumsub webhook event and update DB status.
- * Returns the updated record.
+ * @param {Object} payload - Sumsub webhook payload.
+ * @param {string} payload.externalUserId - Stellar address associated with the applicant.
+ * @param {string} payload.applicantId - Sumsub applicant id.
+ * @param {string} payload.type - Webhook event type (e.g. 'applicantReviewed').
+ * @param {Object} [payload.reviewResult] - Review outcome, present on review events.
+ * @returns {Promise<Object|null>} The updated kycVerification record, or null for unhandled event types.
  */
 async function handleWebhook(payload) {
   const { externalUserId, applicantId, type, reviewResult } = payload;
@@ -142,7 +180,9 @@ async function handleWebhook(payload) {
 
 /**
  * Verify Sumsub webhook HMAC signature.
- * Returns true if valid.
+ * @param {string} rawBody - Raw (unparsed) request body as received.
+ * @param {string} signature - Signature value from the request header.
+ * @returns {boolean} True if the signature matches the expected HMAC digest.
  */
 function verifyWebhookSignature(rawBody, signature) {
   const expected = crypto.createHmac('sha256', SUMSUB_SECRET_KEY).update(rawBody).digest('hex');
